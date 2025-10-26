@@ -3,10 +3,10 @@ import { cn } from "@/lib/utils";
 import Image from "next/image";
 import Link from "next/link";
 import SignOutButton from "../(auth)/components/button-signout";
-import { getMe } from "@/actions/user";
+import { getServerSession } from "@/lib/auth/get-session";
 
 export default async function Home() {
-  const me = await getMe();
+  const me = await getServerSession();
 
   return (
     <div className="grid min-h-screen grid-rows-[20px_1fr_20px] items-center justify-items-center gap-16 p-8 pb-20 font-[family-name:var(--font-geist-sans)] sm:p-20">
@@ -57,8 +57,8 @@ export default async function Home() {
         </div>
         {me ? (
           <div className="flex w-full flex-col gap-5">
-            <h2>Hi, {me.name}</h2>
-            <p>{me.email}</p>
+            <h2>Hi, {me.user.name}</h2>
+            <p>{me.user.email}</p>
             <SignOutButton />
           </div>
         ) : (
