@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useRef } from 'react';
+import { upload } from '@vercel/blob/client';
 import { STYLE_TEMPLATES } from './constants';
 import { StyleTemplate, User } from './types';
 
@@ -37,7 +38,7 @@ const Hero: React.FC<HeroProps> = ({ onGenerated, user, onLogin }) => {
   };
 
   const handleGenerate = async () => {
-    if (!preview) {
+    if (!preview || !file) {
       setError("Please upload a photo first.");
       return;
     }
@@ -47,10 +48,18 @@ const Hero: React.FC<HeroProps> = ({ onGenerated, user, onLogin }) => {
     setResult(null);
 
     try {
-      // Simulate API call - replace with actual API
+      const blob = await upload(`pets-santa/${Date.now()}-${file.name}`, file, {
+        access: 'public',
+        handleUploadUrl: '/api/upload',
+        onUploadProgress: (event) => {
+          console.log(`Upload progress: ${event.percentage}%`);
+        },
+      });
+
       await new Promise(resolve => setTimeout(resolve, 2000));
-      // Placeholder result
-      const generatedUrl = preview;
+
+      const generatedUrl = blob.url;
+
       if (generatedUrl) {
         setResult(generatedUrl);
         onGenerated(preview, generatedUrl, selectedStyle.label);
