@@ -17,7 +17,7 @@ export function GenderRadioGroup({
   return (
     <RadioGroup
       value={String(value)}
-      onValueChange={(val) => onChange(val === "true")}
+      onValueChange={(val: string) => onChange(val === "true")}
       className="grid grid-cols-3 gap-4"
     >
       {options.map((opt) => (

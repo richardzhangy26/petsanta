@@ -11,6 +11,7 @@ import AboutSection from './AboutSection';
 import TestimonialSection from './TestimonialSection';
 import CTASection from './CTASection';
 import PricingPage from './PricingPage';
+import BillingPage from './BillingPage';
 import MyCreationsPage from './MyCreationsPage';
 import { Page, User, Creation } from './types';
 import { useSession, signOut } from '@/lib/auth/client';
@@ -84,8 +85,9 @@ const App: React.FC = () => {
           <CTASection onScrollToTop={scrollToTop} onGoPricing={() => setCurrentPage('pricing')} />
         </>
       )}
-      {currentPage === 'pricing' && <PricingPage onPlanSelect={(plan) => mappedUser ? alert(`Processing purchase for ${plan}...`) : setIsAuthModalOpen(true)} />}
+      {currentPage === 'pricing' && <PricingPage />}
       {currentPage === 'my-creations' && <MyCreationsPage creations={creations} />}
+      {currentPage === 'billing' && <BillingPage />}
       <AuthModal isOpen={isAuthModalOpen} onClose={() => setIsAuthModalOpen(false)} />
     </Layout>
   );
