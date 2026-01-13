@@ -1,15 +1,34 @@
 import { NextResponse } from "next/server";
+import { put } from "@vercel/blob";
+import { eq } from "drizzle-orm";
 import { db } from "@/db";
 import { imageGenerationTasks } from "@/db/schema";
-import { eq } from "drizzle-orm";
 import { extractGeneratedUrls } from "@/lib/kie-ai";
-import { put } from "@vercel/blob/client";
+
+export const runtime = "nodejs";
 
 export async function POST(request: Request) {
   try {
-    const body = await request.json();
+    const body: unknown = await request.json();
 
-    const { taskId, state, resultJson, failMsg } = body.data || body;
+    if (!body || typeof body !== "object") {
+      return NextResponse.json(
+        { error: "Invalid callback payload" },
+        { status: 400 }
+      );
+    }
+
+    const bodyWithData = body as { data?: unknown };
+    const payload = (bodyWithData.data && typeof bodyWithData.data === "object"
+      ? bodyWithData.data
+      : body) as Record<string, unknown>;
+
+    const taskId = typeof payload.taskId === "string" ? payload.taskId : null;
+    const state = typeof payload.state === "string" ? payload.state : null;
+    const resultJson = typeof payload.resultJson === "string" || payload.resultJson === null
+      ? (payload.resultJson as string | null)
+      : null;
+    const failMsg = typeof payload.failMsg === "string" ? payload.failMsg : null;
 
     if (!taskId) {
       console.error("Missing taskId in callback:", body);
@@ -31,7 +50,7 @@ export async function POST(request: Request) {
       );
     }
 
-    let updateData: any = {
+    const updateData: Partial<typeof imageGenerationTasks.$inferInsert> = {
       kieResponse: body,
     };
 
@@ -42,7 +61,6 @@ export async function POST(request: Request) {
         try {
           const response = await fetch(generatedUrls[0]);
           const imageBuffer = Buffer.from(await response.arrayBuffer());
-          const imageBlob = new Blob([imageBuffer], { type: 'image/png' });
 
           const blobToken = process.env.BLOB_READ_WRITE_TOKEN;
           if (!blobToken) {
@@ -51,10 +69,11 @@ export async function POST(request: Request) {
 
           const blob = await put(
             `pets-santa/generated/${task.userId}/${taskId}.png`,
-            imageBlob,
+            imageBuffer,
             {
-              access: 'public',
+              access: "public",
               token: blobToken,
+              contentType: "image/png",
             }
           );
 

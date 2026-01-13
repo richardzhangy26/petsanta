@@ -1,11 +1,13 @@
 import { headers } from "next/headers";
 import { NextResponse } from "next/server";
+import { put } from "@vercel/blob";
+import { eq, and } from "drizzle-orm";
 import { auth } from "@/lib/auth/server";
 import { db } from "@/db";
 import { imageGenerationTasks } from "@/db/schema";
-import { eq, and } from "drizzle-orm";
 import { getKieTaskStatus, extractGeneratedUrls } from "@/lib/kie-ai";
-import { put } from "@vercel/blob/client";
+
+export const runtime = "nodejs";
 
 export async function GET(request: Request) {
   try {
@@ -68,7 +70,6 @@ export async function GET(request: Request) {
           try {
             const response = await fetch(generatedUrls[0]);
             const imageBuffer = Buffer.from(await response.arrayBuffer());
-            const imageBlob = new Blob([imageBuffer], { type: 'image/png' });
 
             const blobToken = process.env.BLOB_READ_WRITE_TOKEN;
             if (!blobToken) {
@@ -77,10 +78,11 @@ export async function GET(request: Request) {
 
             const blob = await put(
               `pets-santa/generated/${userId}/${task.taskId}.png`,
-              imageBlob,
+              imageBuffer,
               {
-                access: 'public',
+                access: "public",
                 token: blobToken,
+                contentType: "image/png",
               }
             );
 
@@ -111,7 +113,7 @@ export async function GET(request: Request) {
           status: newStatus,
           generatedImageUrl: newGeneratedImageUrl,
           errorMessage: newErrorMessage,
-          kieResponse: kieResponse.data as any,
+          kieResponse: kieResponse.data,
           completedAt: newCompletedAt,
         })
         .where(eq(imageGenerationTasks.id, taskId));

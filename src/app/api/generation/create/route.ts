@@ -1,12 +1,13 @@
 import { headers } from "next/headers";
 import { NextResponse } from "next/server";
+import { eq } from "drizzle-orm";
 import { auth } from "@/lib/auth/server";
 import { db } from "@/db";
-import { user } from "@/db/schema/auth";
 import { imageGenerationTasks, creditUsage } from "@/db/schema";
-import { eq } from "drizzle-orm";
-import { upload } from "@vercel/blob/client";
+import { user } from "@/db/schema/auth";
 import { createKieTask } from "@/lib/kie-ai";
+
+export const runtime = "nodejs";
 
 const CREDITS_PER_GENERATION = 20;
 
@@ -19,15 +20,43 @@ export async function POST(request: Request) {
     }
 
     const userId = session.user.id;
-    const body = await request.json();
-    const { file, style, prompt, aspectRatio = "1:1", resolution = "1K" } = body;
+    const body: unknown = await request.json();
 
-    if (!file || !style || !prompt) {
+    if (
+      !body ||
+      typeof body !== "object" ||
+      !("originalImageUrl" in body) ||
+      !("style" in body) ||
+      !("prompt" in body)
+    ) {
       return NextResponse.json(
-        { error: "Missing required fields: file, style, prompt" },
+        { error: "Missing required fields: originalImageUrl, style, prompt" },
         { status: 400 }
       );
     }
+
+    const { originalImageUrl, style, prompt, aspectRatio = "1:1", resolution = "1K" } =
+      body as {
+        originalImageUrl: unknown;
+        style: unknown;
+        prompt: unknown;
+        aspectRatio?: unknown;
+        resolution?: unknown;
+      };
+
+    if (
+      typeof originalImageUrl !== "string" ||
+      typeof style !== "string" ||
+      typeof prompt !== "string"
+    ) {
+      return NextResponse.json(
+        { error: "Invalid request body" },
+        { status: 400 }
+      );
+    }
+
+    const normalizedAspectRatio = typeof aspectRatio === "string" ? aspectRatio : "1:1";
+    const normalizedResolution = typeof resolution === "string" ? resolution : "1K";
 
     const userData = await db.query.user.findFirst({
       where: eq(user.id, userId),
@@ -45,26 +74,8 @@ export async function POST(request: Request) {
       );
     }
 
-    let originalImageUrl: string;
-    try {
-      const blob = await upload(
-        `pets-santa/originals/${userId}/${Date.now()}-${file.name}`,
-        file,
-        {
-          access: 'public',
-          handleUploadUrl: '/api/upload',
-        }
-      );
-      originalImageUrl = blob.url;
-    } catch (uploadError) {
-      console.error("Failed to upload original image:", uploadError);
-      return NextResponse.json(
-        { error: "Failed to upload image" },
-        { status: 500 }
-      );
-    }
-
     const taskId = crypto.randomUUID();
+    const placeholderKieTaskId = crypto.randomUUID();
     const newRemainingCredits = userData.credits - CREDITS_PER_GENERATION;
 
     await db.transaction(async (tx) => {
@@ -84,12 +95,12 @@ export async function POST(request: Request) {
       await tx.insert(imageGenerationTasks).values({
         id: taskId,
         userId,
-        taskId: '',
+        taskId: placeholderKieTaskId,
         originalImageUrl,
         prompt,
         style,
-        aspectRatio,
-        resolution,
+        aspectRatio: normalizedAspectRatio,
+        resolution: normalizedResolution,
         outputFormat: "png",
         status: "waiting",
         creditsUsed: CREDITS_PER_GENERATION,
@@ -104,8 +115,8 @@ export async function POST(request: Request) {
         input: {
           prompt,
           image_input: [originalImageUrl],
-          aspect_ratio: aspectRatio,
-          resolution,
+          aspect_ratio: normalizedAspectRatio,
+          resolution: normalizedResolution,
           output_format: "png",
         },
         callBackUrl: callbackUrl,
@@ -123,7 +134,7 @@ export async function POST(request: Request) {
         .set({
           status: "failed",
           errorMessage: "Failed to create task with Kie.ai",
-          kieResponse: { error: String(kieError) } as any,
+          kieResponse: { error: String(kieError) },
         })
         .where(eq(imageGenerationTasks.id, taskId));
 

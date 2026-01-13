@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useRef, useEffect } from 'react';
+import { upload } from '@vercel/blob/client';
 import { STYLE_TEMPLATES } from './constants';
 import { StyleTemplate, User } from './types';
 
@@ -80,19 +81,21 @@ const Hero: React.FC<HeroProps> = ({ onGenerated, user, onLogin }) => {
     setProgress('Uploading image...');
 
     try {
-      const fileBase64 = await fileToBase64(file);
+      const blob = await upload(
+        `pets-santa/originals/${user.id}/${Date.now()}-${file.name}`,
+        file,
+        {
+          access: 'public',
+          handleUploadUrl: '/api/upload',
+        }
+      );
 
       setProgress('Creating task...');
       const response = await fetch('/api/generation/create', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          file: {
-            name: file.name,
-            type: file.type,
-            size: file.size,
-            data: fileBase64,
-          },
+          originalImageUrl: blob.url,
           style: selectedStyle.label,
           prompt: selectedStyle.prompt,
           aspectRatio: '1:1',
@@ -154,15 +157,6 @@ const Hero: React.FC<HeroProps> = ({ onGenerated, user, onLogin }) => {
     }
 
     setError('Generation timed out. Please check your creations page later.');
-  };
-
-  const fileToBase64 = (file: File): Promise<string> => {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.readAsDataURL(file);
-      reader.onload = () => resolve(reader.result as string);
-      reader.onerror = error => reject(error);
-    });
   };
 
   const reset = () => {
