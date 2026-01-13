@@ -1,24 +1,46 @@
 'use client';
 
-import React, { useState, useRef } from 'react';
-import { upload } from '@vercel/blob/client';
+import React, { useState, useRef, useEffect } from 'react';
 import { STYLE_TEMPLATES } from './constants';
 import { StyleTemplate, User } from './types';
 
 interface HeroProps {
-  onGenerated: (original: string, generated: string, style: string) => void;
+  onGenerated: (taskId: string, style: string) => void;
   user: User | null;
   onLogin: () => void;
 }
+
+const CREDITS_PER_GENERATION = 20;
+const POLL_INTERVAL = 3000;
 
 const Hero: React.FC<HeroProps> = ({ onGenerated, user, onLogin }) => {
   const [file, setFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
   const [selectedStyle, setSelectedStyle] = useState<StyleTemplate>(STYLE_TEMPLATES[0]);
   const [isGenerating, setIsGenerating] = useState(false);
-  const [result, setResult] = useState<string | null>(null);
+  const [currentTaskId, setCurrentTaskId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [progress, setProgress] = useState<string>('');
+  const [creditsRemaining, setCreditsRemaining] = useState<number>(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (user) {
+      fetchCredits();
+    }
+  }, [user]);
+
+  const fetchCredits = async () => {
+    try {
+      const response = await fetch('/api/billing');
+      const data = await response.json();
+      if (response.ok) {
+        setCreditsRemaining(data.credits || 0);
+      }
+    } catch (err) {
+      console.error('Failed to fetch credits:', err);
+    }
+  };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const selected = e.target.files?.[0];
@@ -43,83 +65,118 @@ const Hero: React.FC<HeroProps> = ({ onGenerated, user, onLogin }) => {
       return;
     }
 
+    if (!user) {
+      onLogin();
+      return;
+    }
+
+    if (creditsRemaining < CREDITS_PER_GENERATION) {
+      setError(`Insufficient credits. You need ${CREDITS_PER_GENERATION} credits.`);
+      return;
+    }
+
     setIsGenerating(true);
     setError(null);
-    setResult(null);
+    setProgress('Uploading image...');
 
     try {
-      const blob = await upload(`pets-santa/${Date.now()}-${file.name}`, file, {
-        access: 'public',
-        handleUploadUrl: '/api/upload',
-        onUploadProgress: (event) => {
-          console.log(`Upload progress: ${event.percentage}%`);
-        },
+      const fileBase64 = await fileToBase64(file);
+
+      setProgress('Creating task...');
+      const response = await fetch('/api/generation/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          file: {
+            name: file.name,
+            type: file.type,
+            size: file.size,
+            data: fileBase64,
+          },
+          style: selectedStyle.label,
+          prompt: selectedStyle.prompt,
+          aspectRatio: '1:1',
+          resolution: '1K',
+        }),
       });
 
-      await new Promise(resolve => setTimeout(resolve, 2000));
+      const data = await response.json();
 
-      const generatedUrl = blob.url;
-
-      if (generatedUrl) {
-        setResult(generatedUrl);
-        onGenerated(preview, generatedUrl, selectedStyle.label);
-      } else {
-        setError("Generation failed. Please try again.");
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to create task');
       }
+
+      const taskId = data.id;
+      setCurrentTaskId(taskId);
+      setCreditsRemaining(data.creditsRemaining);
+      setProgress('Generating image...');
+
+      await pollTaskStatus(taskId);
     } catch (err: unknown) {
-      setError("Something went wrong. Please check your API key or connection.");
+      const errorMessage = err instanceof Error ? err.message : 'Something went wrong';
+      setError(errorMessage);
     } finally {
       setIsGenerating(false);
+      setProgress('');
     }
+  };
+
+  const pollTaskStatus = async (taskId: string) => {
+    let attempts = 0;
+    const maxAttempts = 60;
+
+    while (attempts < maxAttempts) {
+      try {
+        const response = await fetch(`/api/generation/status?taskId=${taskId}`);
+        const data = await response.json();
+
+        if (!response.ok) {
+          throw new Error(data.error || 'Failed to check status');
+        }
+
+        if (data.status === 'completed') {
+          onGenerated(taskId, selectedStyle.label);
+          return;
+        }
+
+        if (data.status === 'failed') {
+          setError(data.errorMessage || 'Generation failed. Please try again.');
+          return;
+        }
+
+        attempts++;
+        await new Promise(resolve => setTimeout(resolve, POLL_INTERVAL));
+      } catch (err) {
+        console.error('Polling error:', err);
+        attempts++;
+        await new Promise(resolve => setTimeout(resolve, POLL_INTERVAL));
+      }
+    }
+
+    setError('Generation timed out. Please check your creations page later.');
+  };
+
+  const fileToBase64 = (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.readAsDataURL(file);
+      reader.onload = () => resolve(reader.result as string);
+      reader.onerror = error => reject(error);
+    });
   };
 
   const reset = () => {
     setFile(null);
     setPreview(null);
-    setResult(null);
+    setCurrentTaskId(null);
     setError(null);
-  };
-
-  const handleDownload = () => {
-    if (!user) {
-      onLogin();
-      return;
-    }
-    if (result) {
-      const link = document.createElement('a');
-      link.href = result;
-      link.download = `christmas-pet-${Date.now()}.png`;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-    }
-  };
-
-  const handleShare = async () => {
-    if (result) {
-      try {
-        if (navigator.share) {
-          const blob = await (await fetch(result)).blob();
-          const fileToShare = new File([blob], 'pet-portrait.png', { type: 'image/png' });
-          await navigator.share({
-            title: 'My Christmas Pet Portrait',
-            text: 'Check out my pet in their holiday outfit! Made with Pets Santa.',
-            files: [fileToShare],
-          });
-        } else {
-          await navigator.clipboard.writeText(window.location.href);
-          alert("Link copied to clipboard!");
-        }
-      } catch (err) {
-        console.error("Share failed", err);
-      }
-    }
+    setProgress('');
   };
 
   return (
     <section className="relative py-12 lg:py-20 overflow-hidden transition-colors duration-300">
       <div className="absolute top-0 left-0 w-full h-full -z-10 bg-[radial-gradient(circle_at_top_right,_var(--tw-gradient-stops))] from-red-50 via-white to-green-50 dark:from-red-900/10 dark:via-slate-950 dark:to-green-900/10 opacity-70"></div>
-      
+
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-12 items-center">
           <div className="text-center lg:text-left">
@@ -130,6 +187,22 @@ const Hero: React.FC<HeroProps> = ({ onGenerated, user, onLogin }) => {
               Upload a photo and instantly dress your pet in Santa, Elf, or Reindeer outfits—perfect for holiday cards.
             </p>
 
+            {user && (
+              <div className="mb-6 p-4 bg-red-50 dark:bg-red-900/20 rounded-xl border border-red-100 dark:border-red-900/30">
+                <div className="flex items-center justify-center gap-2 text-sm">
+                  <span className="font-semibold text-slate-900 dark:text-white">
+                    Credits:
+                  </span>
+                  <span className="font-bold text-red-600 dark:text-red-400">
+                    {creditsRemaining}
+                  </span>
+                  <span className="text-slate-600 dark:text-slate-400">
+                    ({CREDITS_PER_GENERATION} per generation)
+                  </span>
+                </div>
+              </div>
+            )}
+
             <div className="flex flex-col gap-4 max-w-md mx-auto lg:mx-0">
               <div className="grid grid-cols-3 gap-2 mb-4">
                 {STYLE_TEMPLATES.map((style) => (
@@ -137,8 +210,8 @@ const Hero: React.FC<HeroProps> = ({ onGenerated, user, onLogin }) => {
                     key={style.id}
                     onClick={() => setSelectedStyle(style)}
                     className={`flex flex-col items-center justify-center p-2 rounded-xl border-2 transition-all gap-1 ${
-                      selectedStyle.id === style.id 
-                      ? 'border-red-600 bg-red-50 dark:bg-red-900/30 text-red-700 dark:text-red-400 shadow-md' 
+                      selectedStyle.id === style.id
+                      ? 'border-red-600 bg-red-50 dark:bg-red-900/30 text-red-700 dark:text-red-400 shadow-md'
                       : 'border-slate-100 dark:border-slate-800 bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-400 hover:border-red-200 dark:hover:border-red-900/50'
                     }`}
                   >
@@ -153,8 +226,8 @@ const Hero: React.FC<HeroProps> = ({ onGenerated, user, onLogin }) => {
                   onClick={handleGenerate}
                   disabled={isGenerating || !preview}
                   className={`w-full py-4 rounded-full font-bold text-lg shadow-xl transition-all transform active:scale-95 flex items-center justify-center gap-2 ${
-                    isGenerating || !preview 
-                    ? 'bg-slate-300 dark:bg-slate-700 text-slate-500 dark:text-slate-500 cursor-not-allowed shadow-none' 
+                    isGenerating || !preview
+                    ? 'bg-slate-300 dark:bg-slate-700 text-slate-500 dark:text-slate-500 cursor-not-allowed shadow-none'
                     : 'bg-red-600 dark:bg-red-600 text-white hover:bg-red-700 dark:hover:bg-red-500 hover:-translate-y-1'
                   }`}
                 >
@@ -164,7 +237,7 @@ const Hero: React.FC<HeroProps> = ({ onGenerated, user, onLogin }) => {
                         <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
                         <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                       </svg>
-                      Generating...
+                      {progress || 'Generating...'}
                     </span>
                   ) : (
                     'Generate Christmas Look'
@@ -185,22 +258,16 @@ const Hero: React.FC<HeroProps> = ({ onGenerated, user, onLogin }) => {
 
           <div className="relative">
             <div className="bg-white dark:bg-slate-900 rounded-[2rem] shadow-2xl p-5 border border-slate-100 dark:border-slate-800 min-h-[400px] flex flex-col transition-colors duration-300">
-              {result ? (
-                <div className="flex-grow flex flex-col animate-fade-in">
-                  <div className="relative group rounded-3xl overflow-hidden bg-slate-100 dark:bg-slate-800 aspect-square shadow-inner">
-                    <img src={result} alt="Generated Portrait" className="w-full h-full object-cover" />
-                    <div className="absolute top-4 left-4 bg-red-600 text-white px-3 py-1 rounded-full text-[10px] font-bold shadow-lg uppercase tracking-widest">After</div>
-                  </div>
-                  <div className="grid grid-cols-3 gap-3 mt-5">
-                    <button onClick={handleDownload} className="col-span-2 bg-slate-900 dark:bg-white text-white dark:text-slate-900 py-4 rounded-2xl font-bold hover:bg-slate-800 dark:hover:bg-slate-100 transition-all flex items-center justify-center gap-2 text-sm">
-                      Download
-                    </button>
-                    <button onClick={handleShare} className="bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 py-4 rounded-2xl font-bold hover:bg-slate-200 dark:hover:bg-slate-700 transition-all flex items-center justify-center text-sm">
-                      Share
-                    </button>
-                    <button onClick={reset} className="col-span-3 text-slate-400 dark:text-slate-500 hover:text-red-600 dark:hover:text-red-400 text-xs font-semibold py-2">
-                      Generate another style
-                    </button>
+              {currentTaskId ? (
+                <div className="flex-grow flex flex-col items-center justify-center">
+                  <div className="animate-bounce text-6xl mb-6">🎄</div>
+                  <div className="text-center">
+                    <p className="text-xl font-bold text-slate-900 dark:text-white mb-2">
+                      {progress || 'Generating your masterpiece...'}
+                    </p>
+                    <p className="text-sm text-slate-600 dark:text-slate-400">
+                      This may take a minute. Stay tuned!
+                    </p>
                   </div>
                 </div>
               ) : preview ? (
@@ -225,7 +292,7 @@ const Hero: React.FC<HeroProps> = ({ onGenerated, user, onLogin }) => {
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H4a2 2 0 00-2 2v12a2 2 0 002 2z" />
                     </svg>
                   </div>
-                  <button 
+                  <button
                     onClick={() => fileInputRef.current?.click()}
                     className="bg-red-600 dark:bg-red-600 text-white px-10 py-4 rounded-full font-bold shadow-xl hover:bg-red-700 dark:hover:bg-red-500 transition-all mb-4"
                   >

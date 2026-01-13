@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import Layout from './Layout';
 import Hero from './Hero';
 import Features from './Features';
@@ -13,7 +13,7 @@ import CTASection from './CTASection';
 import PricingPage from './PricingPage';
 import BillingPage from './BillingPage';
 import MyCreationsPage from './MyCreationsPage';
-import { Page, User, Creation } from './types';
+import { Page, User } from './types';
 import { useSession, signOut } from '@/lib/auth/client';
 import { useDarkMode } from './hooks';
 
@@ -28,47 +28,21 @@ function mapSessionToUser(session: any): User | null {
   };
 }
 
-function generateCreationId(): string {
-  return Math.random().toString(36).substring(2, 11);
-}
-
 const App: React.FC = () => {
   const [currentPage, setCurrentPage] = useState<Page>('home');
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
-  const [creations, setCreations] = useState<Creation[]>([]);
   const { data: session, isPending } = useSession();
   const { isDarkMode, toggleDarkMode } = useDarkMode();
 
   const mappedUser = mapSessionToUser(session);
-
-  useEffect(() => {
-    const saved = localStorage.getItem('pets_santa_creations');
-    if (saved) {
-      try {
-        setCreations(JSON.parse(saved));
-      } catch (error) {
-        console.error('Failed to parse creations from localStorage:', error);
-      }
-    }
-  }, []);
 
   const handleLogout = async () => {
     await signOut();
     setCurrentPage('home');
   };
 
-  const handleNewCreation = (original: string, generated: string, style: string) => {
-    const newCreation: Creation = {
-      id: generateCreationId(),
-      originalImage: original,
-      generatedImage: generated,
-      style: style,
-      date: new Date().toLocaleDateString()
-    };
-
-    const updated = [newCreation, ...creations];
-    setCreations(updated);
-    localStorage.setItem('pets_santa_creations', JSON.stringify(updated));
+  const handleGenerated = (_taskId: string, _style: string) => {
+    setCurrentPage('my-creations');
   };
 
   const scrollToTop = () => window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -96,7 +70,7 @@ const App: React.FC = () => {
     >
       {currentPage === 'home' && (
         <>
-          <Hero onGenerated={handleNewCreation} user={mappedUser} onLogin={openAuthModal} />
+          <Hero onGenerated={handleGenerated} user={mappedUser} onLogin={openAuthModal} />
           <SEOSection />
           <Features />
           <AboutSection />
@@ -106,7 +80,7 @@ const App: React.FC = () => {
         </>
       )}
       {currentPage === 'pricing' && <PricingPage />}
-      {currentPage === 'my-creations' && <MyCreationsPage creations={creations} />}
+      {currentPage === 'my-creations' && <MyCreationsPage />}
       {currentPage === 'billing' && <BillingPage />}
       <AuthModal isOpen={isAuthModalOpen} onClose={closeAuthModal} />
     </Layout>

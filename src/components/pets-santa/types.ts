@@ -15,6 +15,26 @@ export interface Creation {
   date: string;
 }
 
+export interface ImageGenerationTask {
+  id: string;
+  userId: string;
+  taskId: string;
+  originalImageUrl: string;
+  generatedImageUrl: string | null;
+  prompt: string;
+  style: string;
+  aspectRatio: string;
+  resolution: string;
+  outputFormat: string;
+  status: 'waiting' | 'processing' | 'completed' | 'failed';
+  creditsUsed: number;
+  errorMessage: string | null;
+  retryCount: number;
+  createdAt: string;
+  updatedAt: string;
+  completedAt: string | null;
+}
+
 export interface StyleTemplate {
   id: string;
   label: string;
