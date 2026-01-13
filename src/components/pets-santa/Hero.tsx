@@ -1,0 +1,318 @@
+'use client';
+
+import React, { useState, useRef, useEffect } from 'react';
+import { upload } from '@vercel/blob/client';
+import { STYLE_TEMPLATES } from './constants';
+import { StyleTemplate, User } from './types';
+
+interface HeroProps {
+  onGenerated: (taskId: string, style: string) => void;
+  user: User | null;
+  onLogin: () => void;
+}
+
+const CREDITS_PER_GENERATION = 20;
+const POLL_INTERVAL = 3000;
+
+const Hero: React.FC<HeroProps> = ({ onGenerated, user, onLogin }) => {
+  const [file, setFile] = useState<File | null>(null);
+  const [preview, setPreview] = useState<string | null>(null);
+  const [selectedStyle, setSelectedStyle] = useState<StyleTemplate>(STYLE_TEMPLATES[0]);
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [currentTaskId, setCurrentTaskId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [progress, setProgress] = useState<string>('');
+  const [creditsRemaining, setCreditsRemaining] = useState<number>(0);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (user) {
+      fetchCredits();
+    }
+  }, [user]);
+
+  const fetchCredits = async () => {
+    try {
+      const response = await fetch('/api/billing');
+      const data = await response.json();
+      if (response.ok) {
+        setCreditsRemaining(data.credits || 0);
+      }
+    } catch (err) {
+      console.error('Failed to fetch credits:', err);
+    }
+  };
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const selected = e.target.files?.[0];
+    if (selected) {
+      if (selected.size > 10 * 1024 * 1024) {
+        setError("File size too large. Max 10MB.");
+        return;
+      }
+      setFile(selected);
+      setError(null);
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setPreview(reader.result as string);
+      };
+      reader.readAsDataURL(selected);
+    }
+  };
+
+  const handleGenerate = async () => {
+    if (!preview || !file) {
+      setError("Please upload a photo first.");
+      return;
+    }
+
+    if (!user) {
+      onLogin();
+      return;
+    }
+
+    if (creditsRemaining < CREDITS_PER_GENERATION) {
+      setError(`Insufficient credits. You need ${CREDITS_PER_GENERATION} credits.`);
+      return;
+    }
+
+    setIsGenerating(true);
+    setError(null);
+    setProgress('Uploading image...');
+
+    try {
+      const blob = await upload(
+        `pets-santa/originals/${user.id}/${Date.now()}-${file.name}`,
+        file,
+        {
+          access: 'public',
+          handleUploadUrl: '/api/upload',
+        }
+      );
+
+      setProgress('Creating task...');
+      const response = await fetch('/api/generation/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          originalImageUrl: blob.url,
+          style: selectedStyle.label,
+          prompt: selectedStyle.prompt,
+          aspectRatio: '1:1',
+          resolution: '1K',
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to create task');
+      }
+
+      const taskId = data.id;
+      setCurrentTaskId(taskId);
+      setCreditsRemaining(data.creditsRemaining);
+      setProgress('Generating image...');
+
+      await pollTaskStatus(taskId);
+    } catch (err: unknown) {
+      const errorMessage = err instanceof Error ? err.message : 'Something went wrong';
+      setError(errorMessage);
+    } finally {
+      setIsGenerating(false);
+      setProgress('');
+    }
+  };
+
+  const pollTaskStatus = async (taskId: string) => {
+    let attempts = 0;
+    const maxAttempts = 60;
+
+    while (attempts < maxAttempts) {
+      try {
+        const response = await fetch(`/api/generation/status?taskId=${taskId}`);
+        const data = await response.json();
+
+        if (!response.ok) {
+          throw new Error(data.error || 'Failed to check status');
+        }
+
+        if (data.status === 'completed') {
+          onGenerated(taskId, selectedStyle.label);
+          return;
+        }
+
+        if (data.status === 'failed') {
+          setError(data.errorMessage || 'Generation failed. Please try again.');
+          return;
+        }
+
+        attempts++;
+        await new Promise(resolve => setTimeout(resolve, POLL_INTERVAL));
+      } catch (err) {
+        console.error('Polling error:', err);
+        attempts++;
+        await new Promise(resolve => setTimeout(resolve, POLL_INTERVAL));
+      }
+    }
+
+    setError('Generation timed out. Please check your creations page later.');
+  };
+
+  const reset = () => {
+    setFile(null);
+    setPreview(null);
+    setCurrentTaskId(null);
+    setError(null);
+    setProgress('');
+  };
+
+  return (
+    <section className="relative py-12 lg:py-20 overflow-hidden transition-colors duration-300">
+      <div className="absolute top-0 left-0 w-full h-full -z-10 bg-[radial-gradient(circle_at_top_right,_var(--tw-gradient-stops))] from-red-50 via-white to-green-50 dark:from-red-900/10 dark:via-slate-950 dark:to-green-900/10 opacity-70"></div>
+
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-12 items-center">
+          <div className="text-center lg:text-left">
+            <h1 className="text-5xl lg:text-7xl font-bold text-slate-900 dark:text-white leading-tight mb-6">
+              Create a <span className="text-red-600 dark:text-red-500 festive-font">Christmas Portrait</span> of Your Pet
+            </h1>
+            <p className="text-lg lg:text-xl text-slate-600 dark:text-slate-400 mb-8 max-w-xl mx-auto lg:mx-0">
+              Upload a photo and instantly dress your pet in Santa, Elf, or Reindeer outfits—perfect for holiday cards.
+            </p>
+
+            {user && (
+              <div className="mb-6 p-4 bg-red-50 dark:bg-red-900/20 rounded-xl border border-red-100 dark:border-red-900/30">
+                <div className="flex items-center justify-center gap-2 text-sm">
+                  <span className="font-semibold text-slate-900 dark:text-white">
+                    Credits:
+                  </span>
+                  <span className="font-bold text-red-600 dark:text-red-400">
+                    {creditsRemaining}
+                  </span>
+                  <span className="text-slate-600 dark:text-slate-400">
+                    ({CREDITS_PER_GENERATION} per generation)
+                  </span>
+                </div>
+              </div>
+            )}
+
+            <div className="flex flex-col gap-4 max-w-md mx-auto lg:mx-0">
+              <div className="grid grid-cols-3 gap-2 mb-4">
+                {STYLE_TEMPLATES.map((style) => (
+                  <button
+                    key={style.id}
+                    onClick={() => setSelectedStyle(style)}
+                    className={`flex flex-col items-center justify-center p-2 rounded-xl border-2 transition-all gap-1 ${
+                      selectedStyle.id === style.id
+                      ? 'border-red-600 bg-red-50 dark:bg-red-900/30 text-red-700 dark:text-red-400 shadow-md'
+                      : 'border-slate-100 dark:border-slate-800 bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-400 hover:border-red-200 dark:hover:border-red-900/50'
+                    }`}
+                  >
+                    <span className="text-xl">{style.icon}</span>
+                    <span className="text-[10px] font-bold uppercase tracking-tight truncate w-full px-1">{style.label}</span>
+                  </button>
+                ))}
+              </div>
+
+              <div className="flex flex-col gap-3">
+                <button
+                  onClick={handleGenerate}
+                  disabled={isGenerating || !preview}
+                  className={`w-full py-4 rounded-full font-bold text-lg shadow-xl transition-all transform active:scale-95 flex items-center justify-center gap-2 ${
+                    isGenerating || !preview
+                    ? 'bg-slate-300 dark:bg-slate-700 text-slate-500 dark:text-slate-500 cursor-not-allowed shadow-none'
+                    : 'bg-red-600 dark:bg-red-600 text-white hover:bg-red-700 dark:hover:bg-red-500 hover:-translate-y-1'
+                  }`}
+                >
+                  {isGenerating ? (
+                    <span className="flex items-center gap-2">
+                      <svg className="animate-spin h-5 w-5 text-white" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                      </svg>
+                      {progress || 'Generating...'}
+                    </span>
+                  ) : (
+                    'Generate Christmas Look'
+                  )}
+                </button>
+                <div className="flex flex-col items-center gap-1 text-[10px] text-slate-400 dark:text-slate-500">
+                  <span className="flex items-center gap-1 uppercase tracking-widest font-semibold">
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3" viewBox="0 0 20 20" fill="currentColor">
+                      <path fillRule="evenodd" d="M2.166 4.9L10 1.554 17.834 4.9c.82.35 1.166 1.274 1.166 2.1V10c0 5.15-2.6 7.43-9 9-6.4-1.57-9-3.85-9-9V7c0-.826.346-1.75 1.166-2.1zM10 3.3l-5 2.14v4.56c0 3.32 1.4 5.09 5 6.4 3.6-1.31 5-3.08 5-6.4V5.44L10 3.3z" clipRule="evenodd" />
+                    </svg>
+                    Your photos are private
+                  </span>
+                  <p>Best results with clear lighting and your pet centered.</p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="relative">
+            <div className="bg-white dark:bg-slate-900 rounded-[2rem] shadow-2xl p-5 border border-slate-100 dark:border-slate-800 min-h-[400px] flex flex-col transition-colors duration-300">
+              {currentTaskId ? (
+                <div className="flex-grow flex flex-col items-center justify-center">
+                  <div className="animate-bounce text-6xl mb-6">🎄</div>
+                  <div className="text-center">
+                    <p className="text-xl font-bold text-slate-900 dark:text-white mb-2">
+                      {progress || 'Generating your masterpiece...'}
+                    </p>
+                    <p className="text-sm text-slate-600 dark:text-slate-400">
+                      This may take a minute. Stay tuned!
+                    </p>
+                  </div>
+                </div>
+              ) : preview ? (
+                <div className="flex-grow flex flex-col animate-fade-in">
+                  <div className="relative rounded-3xl overflow-hidden bg-slate-100 dark:bg-slate-800 aspect-square shadow-inner">
+                    <img src={preview} alt="Pet Preview" className="w-full h-full object-cover" />
+                    <button onClick={reset} className="absolute top-4 right-4 bg-white/90 dark:bg-slate-800/90 p-2 rounded-full shadow-lg hover:bg-white dark:hover:bg-slate-700 text-slate-600 dark:text-slate-400 hover:text-red-600 transition-all">
+                      <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                      </svg>
+                    </button>
+                    <div className="absolute top-4 left-4 bg-slate-900 dark:bg-slate-700 text-white px-3 py-1 rounded-full text-[10px] font-bold shadow-lg uppercase tracking-widest">Before</div>
+                  </div>
+                  <div className="mt-6 text-center">
+                    <p className="text-sm text-slate-400 dark:text-slate-500 font-medium italic">Ready to spread holiday cheer? ✨</p>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex-grow flex flex-col items-center justify-center border-4 border-dashed border-slate-100 dark:border-slate-800 rounded-3xl p-10 transition-colors hover:border-red-100 dark:hover:border-red-900/40 group">
+                  <div className="w-20 h-20 bg-red-50 dark:bg-red-900/20 rounded-full flex items-center justify-center mb-6 group-hover:scale-110 transition-transform">
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-10 w-10 text-red-500 dark:text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H4a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                    </svg>
+                  </div>
+                  <button
+                    onClick={() => fileInputRef.current?.click()}
+                    className="bg-red-600 dark:bg-red-600 text-white px-10 py-4 rounded-full font-bold shadow-xl hover:bg-red-700 dark:hover:bg-red-500 transition-all mb-4"
+                  >
+                    Upload pet photo
+                  </button>
+                  <p className="text-slate-400 dark:text-slate-500 text-xs font-medium uppercase tracking-widest">JPG / PNG • Up to 10MB</p>
+                  <input type="file" ref={fileInputRef} onChange={handleFileChange} className="hidden" accept="image/*" />
+                </div>
+              )}
+              {error && <div className="mt-4 p-3 bg-red-50 dark:bg-red-900/30 text-red-600 dark:text-red-400 text-xs rounded-xl text-center border border-red-100 dark:border-red-900/50 font-medium">{error}</div>}
+            </div>
+
+            <div className="absolute -bottom-8 -right-8 bg-white dark:bg-slate-800 p-5 rounded-3xl shadow-2xl border border-slate-50 dark:border-slate-700 hidden md:block animate-bounce">
+              <div className="flex items-center gap-3">
+                <div className="w-12 h-12 rounded-2xl bg-green-100 dark:bg-green-900/30 flex items-center justify-center text-2xl">🎄</div>
+                <div>
+                  <div className="text-sm font-bold text-slate-800 dark:text-white">New Styles</div>
+                  <div className="text-[10px] text-slate-500 dark:text-slate-400 font-medium uppercase tracking-widest">2024 Collection</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+};
+
+export default Hero;
